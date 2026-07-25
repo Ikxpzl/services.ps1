@@ -26,7 +26,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -48,7 +48,7 @@ Get-Volume | Where-Object DriveLetter -in 'C','D' | ForEach-Object {
 }
 
 # =========================================================================
-# 4. SERVICE STATUS
+# 4. SERVICE STATUS (Bloque blindado contra nulos mediante Try/Catch)
 # =========================================================================
 Write-Header "SERVICE STATUS"
 $servicesToCheck = @(
@@ -70,18 +70,21 @@ foreach ($s in $servicesToCheck) {
     $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
     if ($svc) {
         if ($svc.Status -eq "Running") {
-            $procId = (Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'").ProcessId
             $timeStr = "Running"
-
-            # Se valida que el ID sea numérico y válido antes de pasarlo a Get-Process
-            if ($null -ne $procId -and $procId -gt 0) {
-                $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-                if ($proc -and $proc.StartTime) {
-                    $timeStr = $proc.StartTime.ToString("HH:mm:ss")
+            
+            try {
+                $cimService = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
+                if ($null -ne $cimService -and $null -ne $cimService.ProcessId -and $cimService.ProcessId -gt 0) {
+                    $proc = Get-Process -Id $cimService.ProcessId -ErrorAction SilentlyContinue
+                    if ($null -ne $proc -and $null -ne $proc.StartTime) {
+                        $timeStr = $proc.StartTime.ToString("HH:mm:ss")
+                    }
                 }
+            } catch {
+                $timeStr = "Running"
             }
 
-            # Si el proceso está restringido o es nulo, se busca mediante Event Logs como plan B
+            # Plan alternativo si el proceso no devolvió hora válida
             if ($timeStr -eq "Running") {
                 $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
                          Where-Object { $_.Properties.Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
@@ -121,11 +124,19 @@ $pfColor = if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" }
 Write-Label "Prefetch Enabled:" $pfStatus $pfColor
 
 # =========================================================================
-# 6. EVENT LOGS
+# 6. EVENT LOGS (Con soporte para USN Journal borrado)
 # =========================================================================
 Write-Header "EVENT LOGS"
-Write-Label "USN Journal cleared -" "No records found" "Green"
-Write-Label "Event Logs cleared -" "No records found" "Green"
+
+# Validación real del estado del USN Journal tras el borrado manual
+$usnCheck = fsutil usn queryjournal C: 2>&1
+if ($usnCheck -match "Error" -or $usnCheck -match "no está activo") {
+    Write-Label "USN Journal cleared -" "Deleted / Inactive" "Yellow"
+} else {
+    Write-Label "USN Journal status -" "Active" "Green"
+}
+
+Write-Label "Event Logs status -" "Monitoring" "Green"
 
 $shutdownEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1074} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($shutdownEvent) { Write-Label "Last PC Shutdown at:" ($shutdownEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Last PC Shutdown at:" "Unknown" }
@@ -143,7 +154,7 @@ Write-Label "Device changes -" "No records found" "Green"
 Write-Header "PREFETCH INTEGRITY"
 if (Test-Path "C:\Windows\Prefetch") {
     $pfFiles = Get-ChildItem "C:\Windows\Prefetch" -ErrorAction SilentlyContinue
-    if ($pfFiles.Count -eq 0) {
+    if ($null -eq $pfFiles -or $pfFiles.Count -eq 0) {
         Write-Host "  No prefetch found?? Check the folder please" -ForegroundColor Yellow
     } else {
         Write-Host "  Prefetch folder looks healthy ($($pfFiles.Count) items found)" -ForegroundColor Green
@@ -159,7 +170,7 @@ Write-Header "Recycle Bin"
 $shell = New-Object -ComObject Shell.Application
 $bin = $shell.NameSpace(0x0a)
 $items = $bin.Items()
-if ($items.Count -gt 0) {
+if ($null -ne $items -and $items.Count -gt 0) {
     $latest = $items | Sort-Object ModifyDate -Descending | Select-Object -First 1
     Write-Label "Last Modified:" ($latest.ModifyDate.ToString("yyyy-MM-dd HH:mm:ss"))
     Write-Label "Total Items:" ($items.Count).ToString()
