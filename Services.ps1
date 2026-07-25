@@ -194,7 +194,8 @@ Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
 }
 
 =========================================================================
-8. RECYCLE BIN=========================================================================
+8. RECYCLE BIN
+=========================================================================
 Write-Header "Recycle Bin"
 $shell = New-Object -ComObject Shell.Application
 $bin = $shell.NameSpace(0x0a)
