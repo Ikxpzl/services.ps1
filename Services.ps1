@@ -3,7 +3,7 @@ Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # =========================================================================
-# 1. DECLARACIÓN DE FUNCIONES (¡Totalmente mejoradas para evitar fallos!)
+# 1. DECLARACIÓN DE FUNCIONES
 # =========================================================================
 function Write-Header ($text) { 
     Write-Host "`n$text" -ForegroundColor Cyan 
@@ -12,7 +12,6 @@ function Write-Header ($text) {
 function Write-Label ($label, $value) {
     Write-Host "  $label " -NoNewline -ForegroundColor Gray
     
-    # La propia función decide el color según el texto.
     $valColor = "Yellow"
     if ($value -eq "Available" -or $value -eq "Enabled" -or $value -eq "Active" -or $value -eq "Active / Valid" -or $value -eq "Monitoring") { $valColor = "Green" }
     if ($value -like "Deleted*" -or $value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown" -or $value -eq "Stopped" -or $value -like "*Disabled*") { $valColor = "DarkRed" }
@@ -81,23 +80,21 @@ foreach ($s in $servicesToCheck) {
         continue
     }
 
-    # Consulta directa al núcleo de Windows en tiempo real
     $cimSvc = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
     
     if ($cimSvc) {
-        # Si el servicio está deshabilitado
+        # CORRECCIÓN FORZADA: Si está deshabilitado o no está corriendo, escribe Stopped inmediatamente y no busca eventos viejos
         if ($cimSvc.StartMode -eq "Disabled") {
-            Write-Service $s.Name $s.Desc "Stopped (Disabled)" "DarkRed"
+            Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
             continue
         }
         
-        # Si el servicio está detenido (Cualquier estado que no sea Running)
         if ($cimSvc.State -ne "Running") {
             Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
             continue
         }
 
-        # Si está corriendo, buscar la hora del proceso o del último evento 7036
+        # Solo si está corriendo buscamos su marca de tiempo exacta
         $timeStr = ""
         if ($null -ne $cimSvc.ProcessId -and $cimSvc.ProcessId -gt 0) {
             $proc = Get-Process -Id $cimSvc.ProcessId -ErrorAction SilentlyContinue
@@ -119,7 +116,7 @@ foreach ($s in $servicesToCheck) {
 }
 
 # =========================================================================
-# 5. REGISTRY (¡Súper limpio y sin parámetros conflictivos!)
+# 5. REGISTRY
 # =========================================================================
 Write-Header "REGISTRY"
 
@@ -143,35 +140,27 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Lógica nativa infalible: si falla la consulta o contiene patrones de error, está inactivo
+# Verificación directa de estado real mediante fsutil
 $isDeletedNow = $false
-try {
-    $usnTest = fsutil usn queryjournal C: 2>&1
-    if ($usnTest -match "Error" -or $usnTest -match "no" -or $usnTest -match "NOT" -or $null -eq $usnTest) {
-        $isDeletedNow = $true
-    }
-} catch {
+$usnTest = fsutil usn queryjournal C: 2>&1
+if ($null -eq $usnTest -or $usnTest -match "Error" -or $usnTest -match "no" -or $usnTest -match "NOT" -or $usnTest.Count -le 2) {
     $isDeletedNow = $true
 }
 
-# Búsqueda de eventos en los 3 canales posibles de Windows
-$deletionEvent = $null
-$logChannels = @('System', 'Security', 'Microsoft-Windows-Ntfs/Operational')
-$eventIds = @(98, 3079, 4660, 4656)
+# CORRECCIÓN DE BÚSQUEDA INDEPENDIENTE: Evita fallos por bloqueo de canales sin auditoría activa
+$foundEvents = @()
+$foundEvents += Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue
+$foundEvents += Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue
+$foundEvents += Get-WinEvent -FilterHashtable @{LogName='Security'; Id=@(4660, 4656)} -MaxEvents 5 -ErrorAction SilentlyContinue
 
-foreach ($channel in $logChannels) {
-    if ($null -eq $deletionEvent) {
-        $deletionEvent = Get-WinEvent -FilterHashtable @{LogName=$channel; Id=$eventIds} -MaxEvents 10 -ErrorAction SilentlyContinue | 
-                         Sort-Object TimeCreated -Descending | Select-Object -First 1
-    }
-}
+$latestDeletionEvent = $foundEvents | Where-Object { $null -ne $_ } | Sort-Object TimeCreated -Descending | Select-Object -First 1
 
 if ($isDeletedNow) {
-    if ($null -ne $deletionEvent) {
-        $deleteTime = $deletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+    if ($null -ne $latestDeletionEvent) {
+        $deleteTime = $latestDeletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
         Write-Label "USN Journal status -" "Deleted at $deleteTime"
     } else {
-        Write-Label "USN Journal status -" "Deleted (Time Unknown)"
+        Write-Label "USN Journal status -" "Deleted"
     }
 } else {
     Write-Label "USN Journal status -" "Active"
@@ -202,7 +191,6 @@ if (Test-Path "C:\Windows\Prefetch") {
         Write-Host "  Prefetch folder looks healthy ($($pfFiles.Count) items found)" -ForegroundColor Green
     }
 } else {
-
     Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
 }
 
