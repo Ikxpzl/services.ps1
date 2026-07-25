@@ -3,7 +3,7 @@ Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # =========================================================================
-# 1. DECLARACIÓN DE FUNCIONES (¡Totalmente mejoradas para evitar fallos!)
+# 1. DECLARACIÓN DE FUNCIONES
 # =========================================================================
 function Write-Header ($text) { 
     Write-Host "`n$text" -ForegroundColor Cyan 
@@ -12,7 +12,6 @@ function Write-Header ($text) {
 function Write-Label ($label, $value) {
     Write-Host "  $label " -NoNewline -ForegroundColor Gray
     
-    # La propia función decide el color según el texto. ¡Adiós a los fallos de IF!
     $valColor = "Yellow"
     if ($value -eq "Available" -or $value -eq "Enabled" -or $value -eq "Active" -or $value -eq "Active / Valid" -or $value -eq "Monitoring") { $valColor = "Green" }
     if ($value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown") { $valColor = "DarkRed" }
@@ -32,7 +31,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -84,7 +83,15 @@ foreach ($s in $servicesToCheck) {
     $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
     if ($svc) {
         $timeStr = ""
-        if ($svc.Status -eq "Running") {
+        
+        # Primero busca el evento de Service Control Manager (7036) para capturar paradas/arranques manuales récientes
+        $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 100 -ErrorAction SilentlyContinue | 
+                 Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
+        
+        if ($event) {
+            $timeStr = $event.TimeCreated.ToString("HH:mm:ss")
+        } elseif ($svc.Status -eq "Running") {
+            # Si no hay evento reciente pero corre, intenta ver la hora del proceso por PID
             try {
                 $cimService = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
                 if ($null -ne $cimService -and $null -ne $cimService.ProcessId -and $cimService.ProcessId -gt 0) {
@@ -97,19 +104,24 @@ foreach ($s in $servicesToCheck) {
         }
 
         if ([string]::IsNullOrEmpty($timeStr)) {
-            $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 100 -ErrorAction SilentlyContinue | 
-                     Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
-            $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { if ($svc.Status -eq "Running") { "Running" } else { "Stopped" } }
+            $timeStr = if ($svc.Status -eq "Running") { "Running" } else { "Stopped" }
         }
 
-        if ($svc.Status -eq "Running") { Write-Service $s.Name $s.Desc $timeStr "Green" } else { Write-Service $s.Name $s.Desc $timeStr "DarkRed" }
+        # Comprobar el modo de inicio para ver si está desactivado por completo
+        if ($svc.StartType -eq "Disabled") {
+            Write-Service $s.Name $s.Desc "$timeStr (Disabled)" "DarkRed"
+        } elseif ($svc.Status -eq "Running") { 
+            Write-Service $s.Name $s.Desc $timeStr "Green" 
+        } else { 
+            Write-Service $s.Name $s.Desc $timeStr "DarkRed" 
+        }
     } else {
         Write-Service $s.Name $s.Desc "Not Found" "DarkRed"
     }
 }
 
 # =========================================================================
-# 5. REGISTRY (¡Súper limpio y sin parámetros conflictivos!)
+# 5. REGISTRY
 # =========================================================================
 Write-Header "REGISTRY"
 
@@ -124,7 +136,7 @@ $activityCache = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windo
 $cacheStatus = if ($activityCache -and $activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
 Write-Label "Activities Cache:" $cacheStatus
 
-$prefetch = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
+$prefetch = Get-ItemProperty -Path "LM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
 $pfStatus = if ($prefetch -and $prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
 Write-Label "Prefetch Enabled:" $pfStatus
 
@@ -133,19 +145,24 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# MODIFICACIÓN: Ahora busca tanto el Evento ID 98 como el ID 3079 en el registro System
-$deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=@(98, 3079)} -MaxEvents 20 -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.Message -like "*USN*" -or $_.Message -like "*diario*" -or $_.Id -eq 3079 } | Select-Object -First 1
+# NUEVA BÚSQUEDA EXCLUSIVA PARA EL BORRADO DE USN (Busca ID 98 en System e ID 3079 en el log Operativo de NTFS)
+$deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $deletionEvent) {
+    $deletionEvent = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+
+# Comprobar estado de ejecución actual
+$usnCheck = fsutil usn queryjournal C: 2>&1
+$isDeleted = ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active"))
 
 if ($null -ne $deletionEvent) {
-    Write-Label "USN Journal status -" "Deleted"
+    # Muestra "Deleted" junto a la hora exacta en la que se generó el registro de borrado
+    $deleteTime = $deletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+    Write-Label "USN Journal status -" "Deleted at $deleteTime"
+} elseif ($isDeleted) {
+    Write-Label "USN Journal status -" "Deleted (Time Unknown)"
 } else {
-    $usnCheck = fsutil usn queryjournal C: 2>&1
-    if ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active")) {
-        Write-Label "USN Journal status -" "Deleted"
-    } else {
-        Write-Label "USN Journal status -" "Active"
-    }
+    Write-Label "USN Journal status -" "Active"
 }
 
 Write-Label "Event Logs status -" "Monitoring"
@@ -173,22 +190,21 @@ if (Test-Path "C:\Windows\Prefetch") {
         Write-Host "  Prefetch folder looks healthy ($($pfFiles.Count) items found)" -ForegroundColor Green
     }
 } else {
-    Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
+Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
 }
 
-# =========================================================================
-# 8. RECYCLE BIN
-# =========================================================================
+=========================================================================
+8. RECYCLE BIN=========================================================================
 Write-Header "Recycle Bin"
 $shell = New-Object -ComObject Shell.Application
 $bin = $shell.NameSpace(0x0a)
 $items = $bin.Items()
 
 if ($null -ne $items -and $items.Count -gt 0) {
-    $latest = $items | Sort-Object ModifyDate -Descending | Select-Object -First 1
-    Write-Label "Last Modified:" ($latest.ModifyDate.ToString("yyyy-MM-dd HH:mm:ss"))
-    Write-Label "Total Items:" ($items.Count).ToString()
-    Write-Label "Latest Item:" $latest.Name
+$latest = $items | Sort-Object ModifyDate -Descending | Select-Object -First 1
+Write-Label "Last Modified:" ($latest.ModifyDate.ToString("yyyy-MM-dd HH:mm:ss"))
+Write-Label "Total Items:" ($items.Count).ToString()
+Write-Label "Latest Item:" $latest.Name
 } else {
 Write-Label "Last Modified:" "N/A"
 Write-Label "Total Items:" "0"
