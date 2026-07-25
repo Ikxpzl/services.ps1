@@ -3,7 +3,7 @@ Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # =========================================================================
-# 1. DECLARACIÓN DE FUNCIONES (Crucial para evitar errores en cascada)
+# 1. DECLARACIÓN DE FUNCIONES
 # =========================================================================
 function Write-Header ($text) { 
     Write-Host "`n$text" -ForegroundColor Cyan 
@@ -24,9 +24,9 @@ function Write-Service ($name, $desc, $status, $color) {
     }
 }
 
-# CARTEL GIGANTE (Modificado para evitar errores de sintaxis por saltos de línea)
+# CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                W I N L O G               " -ForegroundColor Magenta
+Write-Host "                I K X P Z L               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -48,7 +48,7 @@ Get-Volume | Where-Object DriveLetter -in 'C','D' | ForEach-Object {
 }
 
 # =========================================================================
-# 4. SERVICE STATUS (Con extracción de hora real mediante ID de proceso)
+# 4. SERVICE STATUS
 # =========================================================================
 Write-Header "SERVICE STATUS"
 $servicesToCheck = @(
@@ -70,18 +70,24 @@ foreach ($s in $servicesToCheck) {
     $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
     if ($svc) {
         if ($svc.Status -eq "Running") {
-            # Se extrae la hora directamente desde el proceso en ejecución del servicio
             $procId = (Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'").ProcessId
-            $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-            
-            if ($proc -and $proc.StartTime) {
-                $timeStr = $proc.StartTime.ToString("HH:mm:ss")
-            } else {
-                # Alternativa si el proceso está protegido o no accesible
+            $timeStr = "Running"
+
+            # Se valida que el ID sea numérico y válido antes de pasarlo a Get-Process
+            if ($null -ne $procId -and $procId -gt 0) {
+                $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                if ($proc -and $proc.StartTime) {
+                    $timeStr = $proc.StartTime.ToString("HH:mm:ss")
+                }
+            }
+
+            # Si el proceso está restringido o es nulo, se busca mediante Event Logs como plan B
+            if ($timeStr -eq "Running") {
                 $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
                          Where-Object { $_.Properties.Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
-                $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { "Running" }
+                if ($event) { $timeStr = $event.TimeCreated.ToString("HH:mm:ss") }
             }
+
             Write-Service $s.Name $s.Desc $timeStr "Green"
         } else {
             Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
@@ -92,7 +98,7 @@ foreach ($s in $servicesToCheck) {
 }
 
 # =========================================================================
-# 5. REGISTRY (Corregido y blindado contra fallos de comillas)
+# 5. REGISTRY
 # =========================================================================
 Write-Header "REGISTRY"
 $cmdStatus = if (Get-Command cmd -ErrorAction SilentlyContinue) { "Available" } else { "Disabled" }
@@ -115,7 +121,7 @@ $pfColor = if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" }
 Write-Label "Prefetch Enabled:" $pfStatus $pfColor
 
 # =========================================================================
-# 6. EVENT LOGS (Arreglado el conflicto de parámetros de Get-WinEvent)
+# 6. EVENT LOGS
 # =========================================================================
 Write-Header "EVENT LOGS"
 Write-Label "USN Journal cleared -" "No records found" "Green"
@@ -124,7 +130,6 @@ Write-Label "Event Logs cleared -" "No records found" "Green"
 $shutdownEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1074} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($shutdownEvent) { Write-Label "Last PC Shutdown at:" ($shutdownEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Last PC Shutdown at:" "Unknown" }
 
-# Solución al error de parámetros unificando la consulta en la tabla hash
 $timeEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1; ProviderName="Microsoft-Windows-Kernel-General"} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($timeEvent) { Write-Label "System time changed at:" ($timeEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "System time changed at:" "Unknown" }
 
