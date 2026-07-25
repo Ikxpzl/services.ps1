@@ -31,7 +31,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -83,33 +83,28 @@ foreach ($s in $servicesToCheck) {
     $cimSvc = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
     
     if ($cimSvc) {
-        # Buscar el último evento de cambio de estado (ID 7036) ocurrido HOY
         $today = (Get-Date).Date
         $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
                  Where-Object { ($_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*") -and $_.TimeCreated -ge $today } | 
                  Sort-Object TimeCreated -Descending | Select-Object -First 1
 
-        # CASO 1: El servicio está deshabilitado
         if ($cimSvc.StartMode -eq "Disabled") {
             $msg = if ($event) { "Stopped (Disabled) at $($event.TimeCreated.ToString('MM/dd HH:mm:ss'))" } else { "Stopped (Disabled)" }
             Write-Service $s.Name $s.Desc $msg "DarkRed"
             continue
         }
         
-        # CASO 2: El servicio está detenido actualmente
         if ($cimSvc.State -ne "Running") {
             $msg = if ($event) { "Stopped at $($event.TimeCreated.ToString('MM/dd HH:mm:ss'))" } else { "Stopped" }
             Write-Service $s.Name $s.Desc $msg "DarkRed"
             continue
         }
 
-        # CASO 3: El servicio está corriendo pero fue reiniciado/manipulado hoy de forma manual
         $timeStr = ""
         if ($null -ne $cimSvc.ProcessId -and $cimSvc.ProcessId -gt 0) {
             $proc = Get-Process -Id $cimSvc.ProcessId -ErrorAction SilentlyContinue
             if ($proc -and $proc.StartTime) {
                 $timeStr = $proc.StartTime.ToString("HH:mm:ss")
-                # Si el proceso arrancó después del inicio del PC y hubo un evento hoy, es un reinicio manual
                 if ($proc.StartTime -gt $bootTime.AddMinutes(5) -and $event) {
                     $timeStr = "$timeStr [RESTARTED at $($event.TimeCreated.ToString('HH:mm:ss'))]"
                     Write-Service $s.Name $s.Desc $timeStr "Yellow"
@@ -153,45 +148,34 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Inicializar banderas de control
 $isDeletedNow = $false
 $recreatedRecent = $false
-
-# Ejecutar la consulta del diario y capturar salida
 $usnTest = fsutil usn queryjournal C: 2>&1
 
 if ($null -eq $usnTest -or $usnTest -match "Error" -or $usnTest -match "no" -or $usnTest -match "NOT" -or $usnTest.Count -le 2) {
-    # Caso 1: El diario está desactivado por completo o da error de acceso
     $isDeletedNow = $true
 } else {
-    # Caso 2: El diario responde "Active", pero vamos a auditar si se ha recreado/vaciado hace poco
-    # Filtramos las líneas de texto para extraer el identificador único y el USN más bajo
     $lowestUsnLine = $usnTest | Where-Object { $_ -match "Lowest USN|USN m.nimo" }
-    $journalIdLine = $usnTest | Where-Object { $_ -match "Journal ID|Identificador de diario" }
-    
     if ($lowestUsnLine) {
-        # Extraer el valor numérico
         $lowestUsn = [int64]($lowestUsnLine -replace '\D+', '')
-        # Si el USN mínimo está reseteado cerca de 0, es síntoma inequívoco de un borrado y regeneración manual reciente
-        if ($lowestUsn -le 1000) {
-            $recreatedRecent = $true
-        }
+        if ($lowestUsn -le 1000) { $recreatedRecent = $true }
     }
 }
 
-# Búsqueda independiente de eventos forenses en los logs para raspar la hora exacta
+# CAMBIO CLAVE: Forzamos la búsqueda de registros filtrando estrictamente desde las 00:00:00 de hoy
+$todayDate = (Get-Date).Date
 $foundEvents = @()
-$foundEvents += Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue
-$foundEvents += Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue
-$foundEvents += Get-WinEvent -FilterHashtable @{LogName='Security'; Id=@(4660, 4656)} -MaxEvents 5 -ErrorAction SilentlyContinue
+$foundEvents += Get-WinEvent -FilterHashtable @{LogName='System'; Id=98; StartTime=$todayDate} -MaxEvents 5 -ErrorAction SilentlyContinue
+$foundEvents += Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079; StartTime=$todayDate} -MaxEvents 5 -ErrorAction SilentlyContinue
+$foundEvents += Get-WinEvent -FilterHashtable @{LogName='Security'; Id=@(4660, 4656); StartTime=$todayDate} -MaxEvents 5 -ErrorAction SilentlyContinue
 
 $latestDeletionEvent = $foundEvents | Where-Object { $null -ne $_ } | Sort-Object TimeCreated -Descending | Select-Object -First 1
-$deleteTime = if ($latestDeletionEvent) { $latestDeletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss") } else { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") }
 
-# Pintar el estado correcto evaluando las condiciones profundas de NTFS
 if ($isDeletedNow) {
+    $deleteTime = if ($latestDeletionEvent) { $latestDeletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss") } else { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") }
     Write-Label "USN Journal status -" "Deleted at $deleteTime"
 } elseif ($recreatedRecent) {
+    $deleteTime = if ($latestDeletionEvent) { $latestDeletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss") } else { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") }
     Write-Label "USN Journal status -" "Deleted / Recreated at $deleteTime"
 } else {
     Write-Label "USN Journal status -" "Active"
@@ -206,14 +190,13 @@ $timeEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1; ProviderNam
 if ($timeEvent) { Write-Label "System time changed at:" ($timeEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "System time changed at:" "Unknown" }
 
 $logStartEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 1 -ErrorAction SilentlyContinue
-    if ($logStartEvent) { 
-        Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) 
-    } else { 
-        Write-Label "Event Log Service started at:" "Unknown" 
-    }
-    
-    Write-Host "  Device changes - " -NoNewline -ForegroundColor Gray
-    Write-Host "No records found" -ForegroundColor Green
+if ($logStartEvent) { 
+    Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) 
+} else { 
+    Write-Label "Event Log Service started at:" "Unknown" 
+}
+Write-Host "  Device changes - " -NoNewline -ForegroundColor Gray
+Write-Host "No records found" -ForegroundColor Green
 
 # =========================================================================
 # 7. PREFETCH INTEGRITY
@@ -247,5 +230,22 @@ if ($null -ne $items -and $items.Count -gt 0) {
     Write-Label "Last Modified:" "N/A"
     Write-Label "Total Items:" "0"
     Write-Label "Latest Item:" "None"
+}
+
+# =========================================================================
+# 9. ACTIVE SESSIONS & AUDIT
+# =========================================================================
+Write-Header "ACTIVE SESSIONS & AUDIT"
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+Write-Label "Script Executed By:" $currentUser
+
+$logonEvents = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 5 -ErrorAction SilentlyContinue
+if ($logonEvents) {
+    Write-Host "  Recent Logons Detected:" -ForegroundColor Gray
+    foreach ($logEv in $logonEvents) {
+        Write-Host "    > Success Logon at $($logEv.TimeCreated.ToString('HH:mm:ss'))" -ForegroundColor Green
+    }
+} else {
+    Write-Host "  No recent security logon events audited." -ForegroundColor Yellow
 }
 Write-Host ""
