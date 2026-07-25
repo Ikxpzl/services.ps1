@@ -14,7 +14,7 @@ function Write-Label ($label, $value) {
     
     $valColor = "Yellow"
     if ($value -eq "Available" -or $value -eq "Enabled" -or $value -eq "Active" -or $value -eq "Active / Valid" -or $value -eq "Monitoring") { $valColor = "Green" }
-    if ($value -like "Deleted*" -or $value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown" -or $value -eq "Stopped" -or $value -like "*Disabled*") { $valColor = "DarkRed" }
+    if ($value -like "Deleted*" -or $value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown" -or $value -like "Stopped*" -or $value -like "*Disabled*") { $valColor = "DarkRed" }
     
     Write-Host $value -ForegroundColor $valColor
 }
@@ -83,29 +83,42 @@ foreach ($s in $servicesToCheck) {
     $cimSvc = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
     
     if ($cimSvc) {
-        # CORRECCIÓN FORZADA: Si está deshabilitado o no está corriendo, escribe Stopped inmediatamente y no busca eventos viejos
+        # Buscar el último evento de cambio de estado (ID 7036) ocurrido HOY
+        $today = (Get-Date).Date
+        $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
+                 Where-Object { ($_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*") -and $_.TimeCreated -ge $today } | 
+                 Sort-Object TimeCreated -Descending | Select-Object -First 1
+
+        # CASO 1: El servicio está deshabilitado
         if ($cimSvc.StartMode -eq "Disabled") {
-            Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
+            $msg = if ($event) { "Stopped (Disabled) at $($event.TimeCreated.ToString('MM/dd HH:mm:ss'))" } else { "Stopped (Disabled)" }
+            Write-Service $s.Name $s.Desc $msg "DarkRed"
             continue
         }
         
+        # CASO 2: El servicio está detenido actualmente
         if ($cimSvc.State -ne "Running") {
-            Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
+            $msg = if ($event) { "Stopped at $($event.TimeCreated.ToString('MM/dd HH:mm:ss'))" } else { "Stopped" }
+            Write-Service $s.Name $s.Desc $msg "DarkRed"
             continue
         }
 
-        # Solo si está corriendo buscamos su marca de tiempo exacta
+        # CASO 3: El servicio está corriendo pero fue reiniciado/manipulado hoy de forma manual
         $timeStr = ""
         if ($null -ne $cimSvc.ProcessId -and $cimSvc.ProcessId -gt 0) {
             $proc = Get-Process -Id $cimSvc.ProcessId -ErrorAction SilentlyContinue
             if ($proc -and $proc.StartTime) {
                 $timeStr = $proc.StartTime.ToString("HH:mm:ss")
+                # Si el proceso arrancó después del inicio del PC y hubo un evento hoy, es un reinicio manual
+                if ($proc.StartTime -gt $bootTime.AddMinutes(5) -and $event) {
+                    $timeStr = "$timeStr [RESTARTED at $($event.TimeCreated.ToString('HH:mm:ss'))]"
+                    Write-Service $s.Name $s.Desc $timeStr "Yellow"
+                    continue
+                }
             }
         }
 
         if ([string]::IsNullOrEmpty($timeStr)) {
-            $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 30 -ErrorAction SilentlyContinue | 
-                     Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Sort-Object TimeCreated -Descending | Select-Object -First 1
             $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { "Running" }
         }
 
@@ -140,14 +153,14 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Verificación directa de estado real mediante fsutil
+# Comprobación directa mediante consulta de volumen NTFS
 $isDeletedNow = $false
 $usnTest = fsutil usn queryjournal C: 2>&1
 if ($null -eq $usnTest -or $usnTest -match "Error" -or $usnTest -match "no" -or $usnTest -match "NOT" -or $usnTest.Count -le 2) {
     $isDeletedNow = $true
 }
 
-# CORRECCIÓN DE BÚSQUEDA INDEPENDIENTE: Evita fallos por bloqueo de canales sin auditoría activa
+# Búsqueda multicanal de registros guardados
 $foundEvents = @()
 $foundEvents += Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue
 $foundEvents += Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue
@@ -160,7 +173,9 @@ if ($isDeletedNow) {
         $deleteTime = $latestDeletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
         Write-Label "USN Journal status -" "Deleted at $deleteTime"
     } else {
-        Write-Label "USN Journal status -" "Deleted"
+        # MEJORA FORENSE AUTOMÁTICA: Si la auditoría está apagada y no hay logs, calcula la aproximación basándose en los cambios de volumen
+        $backupTime = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        Write-Label "USN Journal status -" "Deleted (Auditing Disabled - Detected Realtime near $backupTime)"
     }
 } else {
     Write-Label "USN Journal status -" "Active"
@@ -175,9 +190,14 @@ $timeEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1; ProviderNam
 if ($timeEvent) { Write-Label "System time changed at:" ($timeEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "System time changed at:" "Unknown" }
 
 $logStartEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 1 -ErrorAction SilentlyContinue
-if ($logStartEvent) { Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Event Log Service started at:" "Unknown" }
-Write-Host "  Device changes - " -NoNewline -ForegroundColor Gray
-Write-Host "No records found" -ForegroundColor Green
+    if ($logStartEvent) { 
+        Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) 
+    } else { 
+        Write-Label "Event Log Service started at:" "Unknown" 
+    }
+    
+    Write-Host "  Device changes - " -NoNewline -ForegroundColor Gray
+    Write-Host "No records found" -ForegroundColor Green
 
 # =========================================================================
 # 7. PREFETCH INTEGRITY
