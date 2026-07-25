@@ -15,7 +15,7 @@ function Write-Label ($label, $value) {
     # La propia función decide el color según el texto.
     $valColor = "Yellow"
     if ($value -eq "Available" -or $value -eq "Enabled" -or $value -eq "Active" -or $value -eq "Active / Valid" -or $value -eq "Monitoring") { $valColor = "Green" }
-    if ($value -like "Deleted*" -or $value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown" -or $value -eq "Stopped") { $valColor = "DarkRed" }
+    if ($value -like "Deleted*" -or $value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown" -or $value -eq "Stopped" -or $value -like "*Disabled*") { $valColor = "DarkRed" }
     
     Write-Host $value -ForegroundColor $valColor
 }
@@ -81,43 +81,38 @@ foreach ($s in $servicesToCheck) {
         continue
     }
 
-    $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
-    if ($svc) {
-        $timeStr = ""
-        
-        # Si el servicio no está corriendo, forzar "Stopped" inmediatamente
-        if ($svc.Status -ne "Running") {
-            Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
+    # Consulta directa al núcleo de Windows en tiempo real
+    $cimSvc = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
+    
+    if ($cimSvc) {
+        # Si el servicio está deshabilitado
+        if ($cimSvc.StartMode -eq "Disabled") {
+            Write-Service $s.Name $s.Desc "Stopped (Disabled)" "DarkRed"
             continue
         }
         
-        # Si está corriendo, buscar el evento 7036 más reciente en orden descendente
-        $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Sort-Object TimeCreated -Descending | Select-Object -First 1
-        
-        if ($event) {
-            $timeStr = $event.TimeCreated.ToString("HH:mm:ss")
-        } else {
-            try {
-                $cimService = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
-                if ($null -ne $cimService -and $null -ne $cimService.ProcessId -and $cimService.ProcessId -gt 0) {
-                    $proc = Get-Process -Id $cimService.ProcessId -ErrorAction SilentlyContinue
-                    if ($null -ne $proc -and $null -ne $proc.StartTime) {
-                        $timeStr = $proc.StartTime.ToString("HH:mm:ss")
-                    }
-                }
-            } catch { $timeStr = "" }
+        # Si el servicio está detenido (Cualquier estado que no sea Running)
+        if ($cimSvc.State -ne "Running") {
+            Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
+            continue
+        }
+
+        # Si está corriendo, buscar la hora del proceso o del último evento 7036
+        $timeStr = ""
+        if ($null -ne $cimSvc.ProcessId -and $cimSvc.ProcessId -gt 0) {
+            $proc = Get-Process -Id $cimSvc.ProcessId -ErrorAction SilentlyContinue
+            if ($proc -and $proc.StartTime) {
+                $timeStr = $proc.StartTime.ToString("HH:mm:ss")
+            }
         }
 
         if ([string]::IsNullOrEmpty($timeStr)) {
-            $timeStr = "Running"
+            $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 30 -ErrorAction SilentlyContinue | 
+                     Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Sort-Object TimeCreated -Descending | Select-Object -First 1
+            $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { "Running" }
         }
 
-        if ($svc.StartType -eq "Disabled") {
-            Write-Service $s.Name $s.Desc "$timeStr (Disabled)" "DarkRed"
-        } else { 
-            Write-Service $s.Name $s.Desc $timeStr "Green" 
-        }
+        Write-Service $s.Name $s.Desc $timeStr "Green"
     } else {
         Write-Service $s.Name $s.Desc "Not Found" "DarkRed"
     }
@@ -148,14 +143,27 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Comprobar el estado real actual mediante fsutil
-$usnCheck = fsutil usn queryjournal C: 2>&1
-$isDeletedNow = ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active"))
+# Lógica nativa infalible: si falla la consulta o contiene patrones de error, está inactivo
+$isDeletedNow = $false
+try {
+    $usnTest = fsutil usn queryjournal C: 2>&1
+    if ($usnTest -match "Error" -or $usnTest -match "no" -or $usnTest -match "NOT" -or $null -eq $usnTest) {
+        $isDeletedNow = $true
+    }
+} catch {
+    $isDeletedNow = $true
+}
 
-# Buscar el evento más RECIENTE de borrado (ID 98 o ID 3079) ordenando descendentemente
-$deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue | Sort-Object TimeCreated -Descending | Select-Object -First 1
-if ($null -eq $deletionEvent) {
-    $deletionEvent = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue | Sort-Object TimeCreated -Descending | Select-Object -First 1
+# Búsqueda de eventos en los 3 canales posibles de Windows
+$deletionEvent = $null
+$logChannels = @('System', 'Security', 'Microsoft-Windows-Ntfs/Operational')
+$eventIds = @(98, 3079, 4660, 4656)
+
+foreach ($channel in $logChannels) {
+    if ($null -eq $deletionEvent) {
+        $deletionEvent = Get-WinEvent -FilterHashtable @{LogName=$channel; Id=$eventIds} -MaxEvents 10 -ErrorAction SilentlyContinue | 
+                         Sort-Object TimeCreated -Descending | Select-Object -First 1
+    }
 }
 
 if ($isDeletedNow) {
@@ -163,7 +171,7 @@ if ($isDeletedNow) {
         $deleteTime = $deletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
         Write-Label "USN Journal status -" "Deleted at $deleteTime"
     } else {
-        Write-Label "USN Journal status -" "Deleted"
+        Write-Label "USN Journal status -" "Deleted (Time Unknown)"
     }
 } else {
     Write-Label "USN Journal status -" "Active"
@@ -194,6 +202,7 @@ if (Test-Path "C:\Windows\Prefetch") {
         Write-Host "  Prefetch folder looks healthy ($($pfFiles.Count) items found)" -ForegroundColor Green
     }
 } else {
+
     Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
 }
 
