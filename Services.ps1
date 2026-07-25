@@ -3,14 +3,20 @@ Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # =========================================================================
-# 1. DECLARACIÓN DE FUNCIONES
+# 1. DECLARACIÓN DE FUNCIONES (¡Totalmente mejoradas para evitar fallos!)
 # =========================================================================
 function Write-Header ($text) { 
     Write-Host "`n$text" -ForegroundColor Cyan 
 }
 
-function Write-Label ($label, $value, $valColor = "Yellow") {
+function Write-Label ($label, $value) {
     Write-Host "  $label " -NoNewline -ForegroundColor Gray
+    
+    # La propia función decide el color según el texto. ¡Adiós a los fallos de IF!
+    $valColor = "Yellow"
+    if ($value -eq "Available" -or $value -eq "Enabled" -or $value -eq "Active" -or $value -eq "Active / Valid" -or $value -eq "Monitoring") { $valColor = "Green" }
+    if ($value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown") { $valColor = "DarkRed" }
+    
     Write-Host $value -ForegroundColor $valColor
 }
 
@@ -26,7 +32,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -103,28 +109,24 @@ foreach ($s in $servicesToCheck) {
 }
 
 # =========================================================================
-# 5. REGISTRY (Corregido de forma estricta contra argumentos inline)
+# 5. REGISTRY (¡Súper limpio y sin parámetros conflictivos!)
 # =========================================================================
 Write-Header "REGISTRY"
 
 $cmdStatus = if (Get-Command cmd -ErrorAction SilentlyContinue) { "Available" } else { "Disabled" }
-if ($cmdStatus -eq "Available") { $cmdColor = "Green" } else { $cmdColor = "DarkRed" }
-Write-Label "CMD:" $cmdStatus $cmdColor
+Write-Label "CMD:" $cmdStatus
 
 $psLogging = Get-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" -ErrorAction SilentlyContinue
 $psStatus = if ($psLogging -and $psLogging.EnableScriptBlockLogging -eq 1) { "Enabled" } else { "Disabled" }
-if ($psStatus -eq "Enabled") { $psColor = "Green" } else { $psColor = "DarkRed" }
-Write-Label "PowerShell Logging:" $psStatus $psColor
+Write-Label "PowerShell Logging:" $psStatus
 
 $activityCache = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -ErrorAction SilentlyContinue
 $cacheStatus = if ($activityCache -and $activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
-if ($cacheStatus -eq "Disabled") { $cacheColor = "DarkRed" } else { $cacheColor = "Green" }
-Write-Label "Activities Cache:" $cacheStatus $cacheColor
+Write-Label "Activities Cache:" $cacheStatus
 
 $prefetch = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
 $pfStatus = if ($prefetch -and $prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
-if ($pfStatus -eq "Enabled") { $pfColor = "Green" } else { $pfColor = "DarkRed" }
-Write-Label "Prefetch Enabled:" $pfStatus $pfColor
+Write-Label "Prefetch Enabled:" $pfStatus
 
 # =========================================================================
 # 6. EVENT LOGS
@@ -135,17 +137,17 @@ $deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEv
                  Where-Object { $_.Message -like "*USN*" -or $_.Message -like "*diario*" } | Select-Object -First 1
 
 if ($null -ne $deletionEvent) {
-    Write-Label "USN Journal status -" "Deleted" "DarkRed"
+    Write-Label "USN Journal status -" "Deleted"
 } else {
     $usnCheck = fsutil usn queryjournal C: 2>&1
     if ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active")) {
-        Write-Label "USN Journal status -" "Deleted" "DarkRed"
+        Write-Label "USN Journal status -" "Deleted"
     } else {
-        Write-Label "USN Journal status -" "Active" "Green"
+        Write-Label "USN Journal status -" "Active"
     }
 }
 
-Write-Label "Event Logs status -" "Monitoring" "Green"
+Write-Label "Event Logs status -" "Monitoring"
 
 $shutdownEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1074} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($shutdownEvent) { Write-Label "Last PC Shutdown at:" ($shutdownEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Last PC Shutdown at:" "Unknown" }
@@ -155,7 +157,8 @@ if ($timeEvent) { Write-Label "System time changed at:" ($timeEvent.TimeCreated.
 
 $logStartEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($logStartEvent) { Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Event Log Service started at:" "Unknown" }
-Write-Label "Device changes -" "No records found" "Green"
+Write-Host "  Device changes - " -NoNewline -ForegroundColor Gray
+Write-Host "No records found" -ForegroundColor Green
 
 # =========================================================================
 # 7. PREFETCH INTEGRITY
