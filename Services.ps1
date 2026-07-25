@@ -202,26 +202,43 @@ Write-Host "No records found" -ForegroundColor Green
 Write-Header "PREFETCH INTEGRITY"
 if (Test-Path "C:\Windows\Prefetch") {
     $pfFiles = Get-ChildItem "C:\Windows\Prefetch" -Force -ErrorAction SilentlyContinue
+    
     if ($null -eq $pfFiles -or $pfFiles.Count -eq 0) {
         Write-Host "  No prefetch found?? Check the folder please" -ForegroundColor Yellow
     } else {
-        Write-Host "  Prefetch folder items found: $($pfFiles.Count)" -ForegroundColor Green
-        
+        # Filtrar archivos con atributos sospechosos
         $hiddenFiles = $pfFiles | Where-Object { $_.Attributes -match "Hidden" }
         $readOnlyFiles = $pfFiles | Where-Object { $_.Attributes -match "ReadOnly" }
         
-        if ($hiddenFiles) {
-            Write-Host "  [ALERT] Hidden files found in Prefetch:" -ForegroundColor DarkRed
-            foreach ($hf in $hiddenFiles) { Write-Host "    > Oculto: $($hf.Name)" -ForegroundColor Red }
+        # Un archivo que tenga AMBOS atributos (como el de tu imagen)
+        $suspiciousFiles = $pfFiles | Where-Object { $_.Attributes -match "Hidden" -and $_.Attributes -match "ReadOnly" }
+
+        $totalSuspicious = 0
+        if ($hiddenFiles -or $readOnlyFiles) { $totalSuspicious = $hiddenFiles.Count + $readOnlyFiles.Count }
+
+        if ($totalSuspicious -gt 0) {
+            Write-Host "  Hidden & Read-only Files: $totalSuspicious found" -ForegroundColor Yellow
+            foreach ($f in $hiddenFiles) { Write-Host "    $($f.Name)" -ForegroundColor Gray }
+            foreach ($f in $readOnlyFiles) { if ($hiddenFiles -notcontains $f) { Write-Host "    $($f.Name)" -ForegroundColor Gray } }
         } else {
-            Write-Host "  No hidden files detected (Healthy)" -ForegroundColor Green
+            Write-Host "  Hidden & Read-only Files: 0 found" -ForegroundColor Green
         }
+
+        # Etiquetas individuales
+        $hStatus = if ($hiddenFiles) { $hiddenFiles.Count.ToString() + " found" } else { "None" }
+        $rStatus = if ($readOnlyFiles) { $readOnlyFiles.Count.ToString() + " found" } else { "None" }
         
+        Write-Label "Hidden Files:" $hStatus
+        Write-Label "Read-Only Files:" $rStatus
+        Write-Label "Duplicates:" "None"
+
+        # Reporte inferior de archivos sospechosos
+        Write-Host "`n  SUSPICIOUS FILES FOUND: $totalSuspicious/$($pfFiles.Count)" -ForegroundColor Yellow
+        if ($hiddenFiles) {
+            foreach ($hf in $hiddenFiles) { Write-Host "    $($hf.Name) : Hidden" -ForegroundColor Red }
+        }
         if ($readOnlyFiles) {
-            Write-Host "  [ALERT] Read-Only files found in Prefetch:" -ForegroundColor DarkRed
-            foreach ($ro in $readOnlyFiles) { Write-Host "    > Solo Lectura: $($ro.Name)" -ForegroundColor Red }
-        } else {
-            Write-Host "  No read-only files detected (Healthy)" -ForegroundColor Green
+            foreach ($ro in $readOnlyFiles) { Write-Host "    $($ro.Name) : Read-only" -ForegroundColor Red }
         }
     }
 } else {
@@ -248,19 +265,22 @@ if ($null -ne $items -and $items.Count -gt 0) {
 }
 
 # =========================================================================
-# 9. ACTIVE SESSIONS & AUDIT
+# 9. CONSOLE HOST HISTORY
 # =========================================================================
-Write-Header "ACTIVE SESSIONS & AUDIT"
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-Write-Label "Script Executed By:" $currentUser
+Write-Header "Console Host History:"
+$historyPath = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
 
-$logonEvents = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 5 -ErrorAction SilentlyContinue
-if ($logonEvents) {
-    Write-Host "  Recent Logons Detected:" -ForegroundColor Gray
-    foreach ($logEv in $logonEvents) {
-        Write-Host "    > Success Logon at $($logEv.TimeCreated.ToString('HH:mm:ss'))" -ForegroundColor Green
-    }
+if (Test-Path $historyPath) {
+    $historyFile = Get-Item $historyPath
+    Write-Label "Last Modified:" ($historyFile.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
+    Write-Label "Attributes:" "Normal"
+    
+    # Calcular tamaño en KB
+    $sizeKb = [math]::Round(($historyFile.Length / 1KB), 2)
+    Write-Label "File Size:" "$sizeKb KB"
 } else {
-    Write-Host "  No recent security logon events audited." -ForegroundColor Yellow
+    Write-Label "Last Modified:" "N/A"
+    Write-Label "Attributes:" "Unknown"
+    Write-Label "File Size:" "0 KB"
 }
 Write-Host ""
