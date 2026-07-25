@@ -31,7 +31,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                W I N L O G               " -ForegroundColor Magenta
+Write-Host "                I K X P Z L               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -153,30 +153,46 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Comprobación directa mediante consulta de volumen NTFS
+# Inicializar banderas de control
 $isDeletedNow = $false
+$recreatedRecent = $false
+
+# Ejecutar la consulta del diario y capturar salida
 $usnTest = fsutil usn queryjournal C: 2>&1
+
 if ($null -eq $usnTest -or $usnTest -match "Error" -or $usnTest -match "no" -or $usnTest -match "NOT" -or $usnTest.Count -le 2) {
+    # Caso 1: El diario está desactivado por completo o da error de acceso
     $isDeletedNow = $true
+} else {
+    # Caso 2: El diario responde "Active", pero vamos a auditar si se ha recreado/vaciado hace poco
+    # Filtramos las líneas de texto para extraer el identificador único y el USN más bajo
+    $lowestUsnLine = $usnTest | Where-Object { $_ -match "Lowest USN|USN m.nimo" }
+    $journalIdLine = $usnTest | Where-Object { $_ -match "Journal ID|Identificador de diario" }
+    
+    if ($lowestUsnLine) {
+        # Extraer el valor numérico
+        $lowestUsn = [int64]($lowestUsnLine -replace '\D+', '')
+        # Si el USN mínimo está reseteado cerca de 0, es síntoma inequívoco de un borrado y regeneración manual reciente
+        if ($lowestUsn -le 1000) {
+            $recreatedRecent = $true
+        }
+    }
 }
 
-# Búsqueda multicanal de registros guardados
+# Búsqueda independiente de eventos forenses en los logs para raspar la hora exacta
 $foundEvents = @()
 $foundEvents += Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue
 $foundEvents += Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue
 $foundEvents += Get-WinEvent -FilterHashtable @{LogName='Security'; Id=@(4660, 4656)} -MaxEvents 5 -ErrorAction SilentlyContinue
 
 $latestDeletionEvent = $foundEvents | Where-Object { $null -ne $_ } | Sort-Object TimeCreated -Descending | Select-Object -First 1
+$deleteTime = if ($latestDeletionEvent) { $latestDeletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss") } else { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") }
 
+# Pintar el estado correcto evaluando las condiciones profundas de NTFS
 if ($isDeletedNow) {
-    if ($null -ne $latestDeletionEvent) {
-        $deleteTime = $latestDeletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
-        Write-Label "USN Journal status -" "Deleted at $deleteTime"
-    } else {
-        # MEJORA FORENSE AUTOMÁTICA: Si la auditoría está apagada y no hay logs, calcula la aproximación basándose en los cambios de volumen
-        $backupTime = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-        Write-Label "USN Journal status -" "Deleted (Auditing Disabled - Detected Realtime near $backupTime)"
-    }
+    Write-Label "USN Journal status -" "Deleted at $deleteTime"
+} elseif ($recreatedRecent) {
+    Write-Label "USN Journal status -" "Deleted / Recreated at $deleteTime"
 } else {
     Write-Label "USN Journal status -" "Active"
 }
