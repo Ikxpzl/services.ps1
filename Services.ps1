@@ -283,4 +283,21 @@ if (Test-Path $historyPath) {
     Write-Label "Attributes:" "Unknown"
     Write-Label "File Size:" "0 KB"
 }
+
+# =========================================================================
+# 10. ACTIVE SESSIONS & AUDIT
+# =========================================================================
+Write-Header "ACTIVE SESSIONS & AUDIT"
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+Write-Label "Script Executed By:" $currentUser
+
+$logonEvents = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 5 -ErrorAction SilentlyContinue
+if ($logonEvents) {
+    Write-Host "  Recent Logons Detected:" -ForegroundColor Gray
+    foreach ($logEv in $logonEvents) {
+        Write-Host "    > Success Logon at $($logEv.TimeCreated.ToString('HH:mm:ss'))" -ForegroundColor Green
+    }
+} else {
+    Write-Host "  No recent security logon events audited." -ForegroundColor Yellow
+}
 Write-Host ""
