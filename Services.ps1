@@ -32,7 +32,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                W I N L O G               " -ForegroundColor Magenta
+Write-Host "                I K X P Z L               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -98,7 +98,7 @@ foreach ($s in $servicesToCheck) {
 
         if ([string]::IsNullOrEmpty($timeStr)) {
             $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 100 -ErrorAction SilentlyContinue | 
-                     Where-Object { $_.Properties.Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
+                     Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
             $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { if ($svc.Status -eq "Running") { "Running" } else { "Stopped" } }
         }
 
@@ -133,8 +133,9 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-$deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 20 -ErrorAction SilentlyContinue | 
-                 Where-Object { $_.Message -like "*USN*" -or $_.Message -like "*diario*" } | Select-Object -First 1
+# MODIFICACIÓN: Ahora busca tanto el Evento ID 98 como el ID 3079 en el registro System
+$deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=@(98, 3079)} -MaxEvents 20 -ErrorAction SilentlyContinue | 
+                 Where-Object { $_.Message -like "*USN*" -or $_.Message -like "*diario*" -or $_.Id -eq 3079 } | Select-Object -First 1
 
 if ($null -ne $deletionEvent) {
     Write-Label "USN Journal status -" "Deleted"
@@ -189,8 +190,8 @@ if ($null -ne $items -and $items.Count -gt 0) {
     Write-Label "Total Items:" ($items.Count).ToString()
     Write-Label "Latest Item:" $latest.Name
 } else {
-    Write-Label "Last Modified:" "N/A"
-    Write-Label "Total Items:" "0"
-    Write-Label "Latest Item:" "None"
+Write-Label "Last Modified:" "N/A"
+Write-Label "Total Items:" "0"
+Write-Label "Latest Item:" "None"
 }
 Write-Host ""
