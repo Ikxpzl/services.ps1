@@ -32,7 +32,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                W I N L O G               " -ForegroundColor Magenta
+Write-Host "                I K X P Z L               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
