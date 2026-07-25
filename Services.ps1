@@ -26,7 +26,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                W I N L O G               " -ForegroundColor Magenta
+Write-Host "                I K X P Z L               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -48,7 +48,7 @@ Get-Volume | Where-Object DriveLetter -in 'C','D' | ForEach-Object {
 }
 
 # =========================================================================
-# 4. SERVICE STATUS (Bloque blindado contra nulos mediante Try/Catch)
+# 4. SERVICE STATUS (Con parches específicos para SysMain y controlador BAM)
 # =========================================================================
 Write-Header "SERVICE STATUS"
 $servicesToCheck = @(
@@ -67,11 +67,28 @@ $servicesToCheck = @(
 )
 
 foreach ($s in $servicesToCheck) {
+    # Caso Especial: El controlador Kernel BAM (Background Activity Moderator)
+    if ($s.Name -eq "Bam") {
+        $bamEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=12} -MaxEvents 50 -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.Message -like "*bam*" -or $_.Properties.Value -like "*bam*" } | Select-Object -First 1
+        
+        if ($bamEvent) {
+            $timeStr = $bamEvent.TimeCreated.ToString("HH:mm:ss")
+        } else {
+            # Plan alternativo si los logs fueron vaciados: asociar al arranque del sistema
+            $timeStr = $bootTime.ToString("HH:mm:ss")
+        }
+        Write-Service $s.Name $s.Desc $timeStr "Green"
+        continue
+    }
+
+    # Procesamiento para el resto de servicios convencionales
     $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
     if ($svc) {
+        $timeStr = ""
+        
+        # Intentar obtener la hora desde el proceso activo (si el servicio está corriendo)
         if ($svc.Status -eq "Running") {
-            $timeStr = "Running"
-            
             try {
                 $cimService = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
                 if ($null -ne $cimService -and $null -ne $cimService.ProcessId -and $cimService.ProcessId -gt 0) {
@@ -80,20 +97,25 @@ foreach ($s in $servicesToCheck) {
                         $timeStr = $proc.StartTime.ToString("HH:mm:ss")
                     }
                 }
-            } catch {
-                $timeStr = "Running"
-            }
+            } catch { $timeStr = "" }
+        }
 
-            # Plan alternativo si el proceso no devolvió hora válida
-            if ($timeStr -eq "Running") {
-                $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
-                         Where-Object { $_.Properties.Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
-                if ($event) { $timeStr = $event.TimeCreated.ToString("HH:mm:ss") }
+        # Plan alternativo obligatorio (si está Stopped como SysMain, o si Get-Process falla)
+        if ([string]::IsNullOrEmpty($timeStr)) {
+            $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 100 -ErrorAction SilentlyContinue | 
+                     Where-Object { $_.Properties.Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
+            if ($event) { 
+                $timeStr = $event.TimeCreated.ToString("HH:mm:ss") 
+            } else {
+                $timeStr = if ($svc.Status -eq "Running") { "Running" } else { "Stopped" }
             }
+        }
 
+        # Imprimir en la consola con el color correspondiente a su estado de ejecución real
+        if ($svc.Status -eq "Running") {
             Write-Service $s.Name $s.Desc $timeStr "Green"
         } else {
-            Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
+            Write-Service $s.Name $s.Desc $timeStr "DarkRed"
         }
     } else {
         Write-Service $s.Name $s.Desc "Not Found" "DarkRed"
@@ -124,11 +146,11 @@ $pfColor = if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" }
 Write-Label "Prefetch Enabled:" $pfStatus $pfColor
 
 # =========================================================================
-# 6. EVENT LOGS (Con soporte para USN Journal borrado)
+# 6. EVENT LOGS
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Validación real del estado del USN Journal tras el borrado manual
+# Manejo dinámico para comprobar el estado real de la auditoría tras borrar el USN Journal
 $usnCheck = fsutil usn queryjournal C: 2>&1
 if ($usnCheck -match "Error" -or $usnCheck -match "no está activo") {
     Write-Label "USN Journal cleared -" "Deleted / Inactive" "Yellow"
@@ -173,7 +195,7 @@ $items = $bin.Items()
 if ($null -ne $items -and $items.Count -gt 0) {
     $latest = $items | Sort-Object ModifyDate -Descending | Select-Object -First 1
     Write-Label "Last Modified:" ($latest.ModifyDate.ToString("yyyy-MM-dd HH:mm:ss"))
-    Write-Label "Total Items:" ($items.Count).ToString()
+        Write-Label "Total Items:" ($items.Count).ToString()
     Write-Label "Latest Item:" $latest.Name
 } else {
     Write-Label "Last Modified:" "N/A"
@@ -181,3 +203,4 @@ if ($null -ne $items -and $items.Count -gt 0) {
     Write-Label "Latest Item:" "None"
 }
 Write-Host ""
+
