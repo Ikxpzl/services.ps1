@@ -48,7 +48,7 @@ Get-Volume | Where-Object DriveLetter -in 'C','D' | ForEach-Object {
 }
 
 # =========================================================================
-# 4. SERVICE STATUS (Con parches específicos para SysMain y controlador BAM)
+# 4. SERVICE STATUS
 # =========================================================================
 Write-Header "SERVICE STATUS"
 $servicesToCheck = @(
@@ -67,27 +67,17 @@ $servicesToCheck = @(
 )
 
 foreach ($s in $servicesToCheck) {
-    # Caso Especial: El controlador Kernel BAM (Background Activity Moderator)
     if ($s.Name -eq "Bam") {
         $bamEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=12} -MaxEvents 50 -ErrorAction SilentlyContinue | 
                     Where-Object { $_.Message -like "*bam*" -or $_.Properties.Value -like "*bam*" } | Select-Object -First 1
-        
-        if ($bamEvent) {
-            $timeStr = $bamEvent.TimeCreated.ToString("HH:mm:ss")
-        } else {
-            # Plan alternativo si los logs fueron vaciados: asociar al arranque del sistema
-            $timeStr = $bootTime.ToString("HH:mm:ss")
-        }
+        $timeStr = if ($bamEvent) { $bamEvent.TimeCreated.ToString("HH:mm:ss") } else { $bootTime.ToString("HH:mm:ss") }
         Write-Service $s.Name $s.Desc $timeStr "Green"
         continue
     }
 
-    # Procesamiento para el resto de servicios convencionales
     $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
     if ($svc) {
         $timeStr = ""
-        
-        # Intentar obtener la hora desde el proceso activo (si el servicio está corriendo)
         if ($svc.Status -eq "Running") {
             try {
                 $cimService = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
@@ -100,23 +90,13 @@ foreach ($s in $servicesToCheck) {
             } catch { $timeStr = "" }
         }
 
-        # Plan alternativo obligatorio (si está Stopped como SysMain, o si Get-Process falla)
         if ([string]::IsNullOrEmpty($timeStr)) {
             $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 100 -ErrorAction SilentlyContinue | 
                      Where-Object { $_.Properties.Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
-            if ($event) { 
-                $timeStr = $event.TimeCreated.ToString("HH:mm:ss") 
-            } else {
-                $timeStr = if ($svc.Status -eq "Running") { "Running" } else { "Stopped" }
-            }
+            $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { if ($svc.Status -eq "Running") { "Running" } else { "Stopped" } }
         }
 
-        # Imprimir en la consola con el color correspondiente a su estado de ejecución real
-        if ($svc.Status -eq "Running") {
-            Write-Service $s.Name $s.Desc $timeStr "Green"
-        } else {
-            Write-Service $s.Name $s.Desc $timeStr "DarkRed"
-        }
+        if ($svc.Status -eq "Running") { Write-Service $s.Name $s.Desc $timeStr "Green" } else { Write-Service $s.Name $s.Desc $timeStr "DarkRed" }
     } else {
         Write-Service $s.Name $s.Desc "Not Found" "DarkRed"
     }
@@ -127,35 +107,31 @@ foreach ($s in $servicesToCheck) {
 # =========================================================================
 Write-Header "REGISTRY"
 $cmdStatus = if (Get-Command cmd -ErrorAction SilentlyContinue) { "Available" } else { "Disabled" }
-$cmdColor = if ($cmdStatus -eq "Available") { "Green" } else { "DarkRed" }
-Write-Label "CMD:" $cmdStatus $cmdColor
+Write-Label "CMD:" $cmdStatus (if ($cmdStatus -eq "Available") { "Green" } else { "DarkRed" })
 
 $psLogging = Get-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" -ErrorAction SilentlyContinue
 $psStatus = if ($psLogging -and $psLogging.EnableScriptBlockLogging -eq 1) { "Enabled" } else { "Disabled" }
-$psColor = if ($psStatus -eq "Enabled") { "Green" } else { "DarkRed" }
-Write-Label "PowerShell Logging:" $psStatus $psColor
+Write-Label "PowerShell Logging:" $psStatus (if ($psStatus -eq "Enabled") { "Green" } else { "DarkRed" })
 
 $activityCache = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -ErrorAction SilentlyContinue
 $cacheStatus = if ($activityCache -and $activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
-$cacheColor = if ($cacheStatus -eq "Disabled") { "DarkRed" } else { "Green" }
-Write-Label "Activities Cache:" $cacheStatus $cacheColor
+Write-Label "Activities Cache:" $cacheStatus (if ($cacheStatus -eq "Disabled") { "DarkRed" } else { "Green" })
 
 $prefetch = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
 $pfStatus = if ($prefetch -and $prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
-$pfColor = if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" }
-Write-Label "Prefetch Enabled:" $pfStatus $pfColor
+Write-Label "Prefetch Enabled:" $pfStatus (if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" })
 
 # =========================================================================
-# 6. EVENT LOGS
+# 6. EVENT LOGS (Control estricto y real del USN Journal)
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Manejo dinámico para comprobar el estado real de la auditoría tras borrar el USN Journal
+# Comprobación robusta del USN Journal
 $usnCheck = fsutil usn queryjournal C: 2>&1
-if ($usnCheck -match "Error" -or $usnCheck -match "no está activo") {
-    Write-Label "USN Journal cleared -" "Deleted / Inactive" "Yellow"
+if ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active")) {
+    Write-Label "USN Journal status -" "Deleted / Inactive" "DarkRed"
 } else {
-    Write-Label "USN Journal status -" "Active" "Green"
+    Write-Label "USN Journal status -" "Active / Valid" "Green"
 }
 
 Write-Label "Event Logs status -" "Monitoring" "Green"
@@ -186,16 +162,17 @@ if (Test-Path "C:\Windows\Prefetch") {
 }
 
 # =========================================================================
-# 8. RECYCLE BIN
+# 8. RECYCLE BIN (Estructurado correctamente línea por línea)
 # =========================================================================
 Write-Header "Recycle Bin"
 $shell = New-Object -ComObject Shell.Application
 $bin = $shell.NameSpace(0x0a)
 $items = $bin.Items()
+
 if ($null -ne $items -and $items.Count -gt 0) {
     $latest = $items | Sort-Object ModifyDate -Descending | Select-Object -First 1
     Write-Label "Last Modified:" ($latest.ModifyDate.ToString("yyyy-MM-dd HH:mm:ss"))
-        Write-Label "Total Items:" ($items.Count).ToString()
+    Write-Label "Total Items:" ($items.Count).ToString()
     Write-Label "Latest Item:" $latest.Name
 } else {
     Write-Label "Last Modified:" "N/A"
@@ -203,4 +180,3 @@ if ($null -ne $items -and $items.Count -gt 0) {
     Write-Label "Latest Item:" "None"
 }
 Write-Host ""
-
