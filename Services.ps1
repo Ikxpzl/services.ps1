@@ -26,7 +26,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -103,31 +103,31 @@ foreach ($s in $servicesToCheck) {
 }
 
 # =========================================================================
-# 5. REGISTRY (Corregido: Evaluaciones IF limpias y separadas)
+# 5. REGISTRY (Corregido de forma estricta contra argumentos inline)
 # =========================================================================
 Write-Header "REGISTRY"
 
 $cmdStatus = if (Get-Command cmd -ErrorAction SilentlyContinue) { "Available" } else { "Disabled" }
-$cmdColor = if ($cmdStatus -eq "Available") { "Green" } else { "DarkRed" }
+if ($cmdStatus -eq "Available") { $cmdColor = "Green" } else { $cmdColor = "DarkRed" }
 Write-Label "CMD:" $cmdStatus $cmdColor
 
 $psLogging = Get-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" -ErrorAction SilentlyContinue
 $psStatus = if ($psLogging -and $psLogging.EnableScriptBlockLogging -eq 1) { "Enabled" } else { "Disabled" }
-$psColor = if ($psStatus -eq "Enabled") { "Green" } else { "DarkRed" }
+if ($psStatus -eq "Enabled") { $psColor = "Green" } else { $psColor = "DarkRed" }
 Write-Label "PowerShell Logging:" $psStatus $psColor
 
 $activityCache = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -ErrorAction SilentlyContinue
 $cacheStatus = if ($activityCache -and $activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
-$cacheColor = if ($cacheStatus -eq "Disabled") { "DarkRed" } else { "Green" }
+if ($cacheStatus -eq "Disabled") { $cacheColor = "DarkRed" } else { $cacheColor = "Green" }
 Write-Label "Activities Cache:" $cacheStatus $cacheColor
 
 $prefetch = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
 $pfStatus = if ($prefetch -and $prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
-$pfColor = if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" }
+if ($pfStatus -eq "Enabled") { $pfColor = "Green" } else { $pfColor = "DarkRed" }
 Write-Label "Prefetch Enabled:" $pfStatus $pfColor
 
 # =========================================================================
-# 6. EVENT LOGS 
+# 6. EVENT LOGS
 # =========================================================================
 Write-Header "EVENT LOGS"
 
