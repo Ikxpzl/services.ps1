@@ -31,7 +31,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -72,11 +72,14 @@ $servicesToCheck = @(
 )
 
 foreach ($s in $servicesToCheck) {
+    # MODIFICACIÓN: Si es BAM, comprueba si está en el sistema y pone "Enabled" directamente sin la hora
     if ($s.Name -eq "Bam") {
-        $bamEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=12} -MaxEvents 50 -ErrorAction SilentlyContinue | 
-                    Where-Object { $_.Message -like "*bam*" -or $_.Properties.Value -like "*bam*" } | Select-Object -First 1
-        $timeStr = if ($bamEvent) { $bamEvent.TimeCreated.ToString("HH:mm:ss") } else { $bootTime.ToString("HH:mm:ss") }
-        Write-Service $s.Name $s.Desc $timeStr "Green"
+        $bamCheck = Get-Service -Name "Bam" -ErrorAction SilentlyContinue
+        if ($null -ne $bamCheck) {
+            Write-Service $s.Name $s.Desc "Enabled" "Green"
+        } else {
+            Write-Service $s.Name $s.Desc "Not Found" "DarkRed"
+        }
         continue
     }
 
@@ -162,7 +165,6 @@ if ($null -eq $usnTest -or $usnTest -match "Error" -or $usnTest -match "no" -or 
     }
 }
 
-# CAMBIO CLAVE: Forzamos la búsqueda de registros filtrando estrictamente desde las 00:00:00 de hoy
 $todayDate = (Get-Date).Date
 $foundEvents = @()
 $foundEvents += Get-WinEvent -FilterHashtable @{LogName='System'; Id=98; StartTime=$todayDate} -MaxEvents 5 -ErrorAction SilentlyContinue
@@ -190,11 +192,7 @@ $timeEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1; ProviderNam
 if ($timeEvent) { Write-Label "System time changed at:" ($timeEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "System time changed at:" "Unknown" }
 
 $logStartEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 1 -ErrorAction SilentlyContinue
-if ($logStartEvent) { 
-    Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) 
-} else { 
-    Write-Label "Event Log Service started at:" "Unknown" 
-}
+if ($logStartEvent) { Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Event Log Service started at:" "Unknown" }
 Write-Host "  Device changes - " -NoNewline -ForegroundColor Gray
 Write-Host "No records found" -ForegroundColor Green
 
@@ -203,11 +201,28 @@ Write-Host "No records found" -ForegroundColor Green
 # =========================================================================
 Write-Header "PREFETCH INTEGRITY"
 if (Test-Path "C:\Windows\Prefetch") {
-    $pfFiles = Get-ChildItem "C:\Windows\Prefetch" -ErrorAction SilentlyContinue
+    $pfFiles = Get-ChildItem "C:\Windows\Prefetch" -Force -ErrorAction SilentlyContinue
     if ($null -eq $pfFiles -or $pfFiles.Count -eq 0) {
         Write-Host "  No prefetch found?? Check the folder please" -ForegroundColor Yellow
     } else {
-        Write-Host "  Prefetch folder looks healthy ($($pfFiles.Count) items found)" -ForegroundColor Green
+        Write-Host "  Prefetch folder items found: $($pfFiles.Count)" -ForegroundColor Green
+        
+        $hiddenFiles = $pfFiles | Where-Object { $_.Attributes -match "Hidden" }
+        $readOnlyFiles = $pfFiles | Where-Object { $_.Attributes -match "ReadOnly" }
+        
+        if ($hiddenFiles) {
+            Write-Host "  [ALERT] Hidden files found in Prefetch:" -ForegroundColor DarkRed
+            foreach ($hf in $hiddenFiles) { Write-Host "    > Oculto: $($hf.Name)" -ForegroundColor Red }
+        } else {
+            Write-Host "  No hidden files detected (Healthy)" -ForegroundColor Green
+        }
+        
+        if ($readOnlyFiles) {
+            Write-Host "  [ALERT] Read-Only files found in Prefetch:" -ForegroundColor DarkRed
+            foreach ($ro in $readOnlyFiles) { Write-Host "    > Solo Lectura: $($ro.Name)" -ForegroundColor Red }
+        } else {
+            Write-Host "  No read-only files detected (Healthy)" -ForegroundColor Green
+        }
     }
 } else {
     Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
