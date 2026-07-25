@@ -103,35 +103,46 @@ foreach ($s in $servicesToCheck) {
 }
 
 # =========================================================================
-# 5. REGISTRY
+# 5. REGISTRY (Corregido: Evaluaciones IF limpias y separadas)
 # =========================================================================
 Write-Header "REGISTRY"
+
 $cmdStatus = if (Get-Command cmd -ErrorAction SilentlyContinue) { "Available" } else { "Disabled" }
-Write-Label "CMD:" $cmdStatus (if ($cmdStatus -eq "Available") { "Green" } else { "DarkRed" })
+$cmdColor = if ($cmdStatus -eq "Available") { "Green" } else { "DarkRed" }
+Write-Label "CMD:" $cmdStatus $cmdColor
 
 $psLogging = Get-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" -ErrorAction SilentlyContinue
 $psStatus = if ($psLogging -and $psLogging.EnableScriptBlockLogging -eq 1) { "Enabled" } else { "Disabled" }
-Write-Label "PowerShell Logging:" $psStatus (if ($psStatus -eq "Enabled") { "Green" } else { "DarkRed" })
+$psColor = if ($psStatus -eq "Enabled") { "Green" } else { "DarkRed" }
+Write-Label "PowerShell Logging:" $psStatus $psColor
 
 $activityCache = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -ErrorAction SilentlyContinue
 $cacheStatus = if ($activityCache -and $activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
-Write-Label "Activities Cache:" $cacheStatus (if ($cacheStatus -eq "Disabled") { "DarkRed" } else { "Green" })
+$cacheColor = if ($cacheStatus -eq "Disabled") { "DarkRed" } else { "Green" }
+Write-Label "Activities Cache:" $cacheStatus $cacheColor
 
 $prefetch = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
 $pfStatus = if ($prefetch -and $prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
-Write-Label "Prefetch Enabled:" $pfStatus (if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" })
+$pfColor = if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" }
+Write-Label "Prefetch Enabled:" $pfStatus $pfColor
 
 # =========================================================================
-# 6. EVENT LOGS (Control estricto y real del USN Journal)
+# 6. EVENT LOGS 
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Comprobación robusta del USN Journal
-$usnCheck = fsutil usn queryjournal C: 2>&1
-if ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active")) {
-    Write-Label "USN Journal status -" "Deleted / Inactive" "DarkRed"
+$deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 20 -ErrorAction SilentlyContinue | 
+                 Where-Object { $_.Message -like "*USN*" -or $_.Message -like "*diario*" } | Select-Object -First 1
+
+if ($null -ne $deletionEvent) {
+    Write-Label "USN Journal status -" "Deleted" "DarkRed"
 } else {
-    Write-Label "USN Journal status -" "Active / Valid" "Green"
+    $usnCheck = fsutil usn queryjournal C: 2>&1
+    if ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active")) {
+        Write-Label "USN Journal status -" "Deleted" "DarkRed"
+    } else {
+        Write-Label "USN Journal status -" "Active" "Green"
+    }
 }
 
 Write-Label "Event Logs status -" "Monitoring" "Green"
@@ -162,7 +173,7 @@ if (Test-Path "C:\Windows\Prefetch") {
 }
 
 # =========================================================================
-# 8. RECYCLE BIN (Estructurado correctamente línea por línea)
+# 8. RECYCLE BIN
 # =========================================================================
 Write-Header "Recycle Bin"
 $shell = New-Object -ComObject Shell.Application
