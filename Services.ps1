@@ -190,25 +190,26 @@ if (Test-Path "C:\Windows\Prefetch") {
         Write-Host "  Prefetch folder looks healthy ($($pfFiles.Count) items found)" -ForegroundColor Green
     }
 } else {
-Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
+    Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
 }
 
-=========================================================================
-8. RECYCLE BIN
-=========================================================================
+# =========================================================================
+# 8. RECYCLE BIN
+# =========================================================================
 Write-Header "Recycle Bin"
 $shell = New-Object -ComObject Shell.Application
 $bin = $shell.NameSpace(0x0a)
 $items = $bin.Items()
 
 if ($null -ne $items -and $items.Count -gt 0) {
-$latest = $items | Sort-Object ModifyDate -Descending | Select-Object -First 1
-Write-Label "Last Modified:" ($latest.ModifyDate.ToString("yyyy-MM-dd HH:mm:ss"))
-Write-Label "Total Items:" ($items.Count).ToString()
-Write-Label "Latest Item:" $latest.Name
+    $latest = $items | Sort-Object ModifyDate -Descending | Select-Object -First 1
+    Write-Label "Last Modified:" ($latest.ModifyDate.ToString("yyyy-MM-dd HH:mm:ss"))
+    Write-Label "Total Items:" ($items.Count).ToString()
+    Write-Label "Latest Item:" $latest.Name
 } else {
-Write-Label "Last Modified:" "N/A"
-Write-Label "Total Items:" "0"
-Write-Label "Latest Item:" "None"
+    Write-Label "Last Modified:" "N/A"
+    Write-Label "Total Items:" "0"
+    Write-Label "Latest Item:" "None"
 }
 Write-Host ""
+
