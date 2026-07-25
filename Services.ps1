@@ -3,9 +3,11 @@ Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # =========================================================================
-# 0. DECLARACIÓN DE FUNCIONES (Siempre primero para evitar CommandNotFound)
+# 1. DECLARACIÓN DE FUNCIONES (Crucial para evitar errores en cascada)
 # =========================================================================
-function Write-Header ($text) { Write-Host "`n$text" -ForegroundColor Cyan }
+function Write-Header ($text) { 
+    Write-Host "`n$text" -ForegroundColor Cyan 
+}
 
 function Write-Label ($label, $value, $valColor = "Yellow") {
     Write-Host "  $label " -NoNewline -ForegroundColor Gray
@@ -15,35 +17,39 @@ function Write-Label ($label, $value, $valColor = "Yellow") {
 function Write-Service ($name, $desc, $status, $color) {
     Write-Host "  $($name.PadRight(15))" -NoNewline -ForegroundColor $color
     Write-Host "$($desc.PadRight(45))" -NoNewline -ForegroundColor $color
-    if ($status -like "*:*") { Write-Host "| $status" -ForegroundColor Gray } else { Write-Host $status -ForegroundColor $color }
+    if ($status -like "*:*") { 
+        Write-Host "| $status" -ForegroundColor Gray 
+    } else { 
+        Write-Host $status -ForegroundColor $color 
+    }
 }
 
-# CARTEL GIGANTE EN LA PARTE SUPERIOR
-Write-Host @"
-  _ _               _     _ 
-
- | | | ___ _ _ ___ | |___| |
- | | |' _ \_ _'_  \| /_  | |
- |_|_|  _/__/|_____|_\_  |_|
-     |_|              |___| 
-"@ -ForegroundColor Magenta
+# CARTEL GIGANTE (Modificado para evitar errores de sintaxis por saltos de línea)
+Write-Host " =========================================" -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
-# 1. SYSTEM BOOT TIME (Real)
+# =========================================================================
+# 2. SYSTEM BOOT TIME
+# =========================================================================
 Write-Header "SYSTEM BOOT TIME"
 $bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $uptime = (Get-Date) - $bootTime
 Write-Label "Last Boot:" ($bootTime.ToString("yyyy-MM-dd HH:mm:ss"))
 Write-Label "Uptime:" "$($uptime.Days) days, $($uptime.Hours.ToString('00')):$($uptime.Minutes.ToString('00')):$($uptime.Seconds.ToString('00'))"
 
-# 2. CONNECTED DRIVES (Real)
+# =========================================================================
+# 3. CONNECTED DRIVES
+# =========================================================================
 Write-Header "CONNECTED DRIVES"
 Get-Volume | Where-Object DriveLetter -in 'C','D' | ForEach-Object {
     Write-Host "  $($_.DriveLetter):: " -NoNewline -ForegroundColor Gray
     Write-Host $_.FileSystemType -ForegroundColor Green
 }
 
-# 3. SERVICE STATUS (Real)
+# =========================================================================
+# 4. SERVICE STATUS (Con extracción de hora real mediante ID de proceso)
+# =========================================================================
 Write-Header "SERVICE STATUS"
 $servicesToCheck = @(
     @{Name="SysMain"; Desc="SysMain"}
@@ -56,7 +62,7 @@ $servicesToCheck = @(
     @{Name="Appinfo"; Desc="Application Information"}
     @{Name="CDPSvc"; Desc="Connected Devices Platform Service"}
     @{Name="DcomLaunch"; Desc="DCOM Server Process Launcher"}
-    @{Name="PlugPlay"; Play="Plug and Play"; Desc="Plug and Play"}
+    @{Name="PlugPlay"; Desc="Plug and Play"}
     @{Name="wsearch"; Desc="Windows Search"}
 )
 
@@ -64,11 +70,18 @@ foreach ($s in $servicesToCheck) {
     $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
     if ($svc) {
         if ($svc.Status -eq "Running") {
-            # Se optimiza la búsqueda del evento 7036 sin depender estrictamente de cadenas de texto rígidas
-            $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 80 -ErrorAction SilentlyContinue | 
-                     Where-Object { $_.Properties[0].Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
+            # Se extrae la hora directamente desde el proceso en ejecución del servicio
+            $procId = (Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'").ProcessId
+            $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
             
-            $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { "Running" }
+            if ($proc -and $proc.StartTime) {
+                $timeStr = $proc.StartTime.ToString("HH:mm:ss")
+            } else {
+                # Alternativa si el proceso está protegido o no accesible
+                $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
+                         Where-Object { $_.Properties.Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
+                $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { "Running" }
+            }
             Write-Service $s.Name $s.Desc $timeStr "Green"
         } else {
             Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
@@ -78,24 +91,32 @@ foreach ($s in $servicesToCheck) {
     }
 }
 
-# 4. REGISTRY (Real)
+# =========================================================================
+# 5. REGISTRY (Corregido y blindado contra fallos de comillas)
+# =========================================================================
 Write-Header "REGISTRY"
 $cmdStatus = if (Get-Command cmd -ErrorAction SilentlyContinue) { "Available" } else { "Disabled" }
-Write-Label "CMD:" $cmdStatus (if ($cmdStatus -eq "Available") { "Green" } else { "DarkRed" })
+$cmdColor = if ($cmdStatus -eq "Available") { "Green" } else { "DarkRed" }
+Write-Label "CMD:" $cmdStatus $cmdColor
 
 $psLogging = Get-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" -ErrorAction SilentlyContinue
-$psStatus = if ($psLogging.EnableScriptBlockLogging -eq 1) { "Enabled" } else { "Disabled" }
-Write-Label "PowerShell Logging:" $psStatus (if ($psStatus -eq "Enabled") { "Green" } else { "DarkRed" })
+$psStatus = if ($psLogging -and $psLogging.EnableScriptBlockLogging -eq 1) { "Enabled" } else { "Disabled" }
+$psColor = if ($psStatus -eq "Enabled") { "Green" } else { "DarkRed" }
+Write-Label "PowerShell Logging:" $psStatus $psColor
 
 $activityCache = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -ErrorAction SilentlyContinue
-$cacheStatus = if ($activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
-Write-Label "Activities Cache:" $cacheStatus (if ($cacheStatus -eq "Disabled") { "DarkRed" } else { "Green" })
+$cacheStatus = if ($activityCache -and $activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
+$cacheColor = if ($cacheStatus -eq "Disabled") { "DarkRed" } else { "Green" }
+Write-Label "Activities Cache:" $cacheStatus $cacheColor
 
 $prefetch = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
-$pfStatus = if ($prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
-Write-Label "Prefetch Enabled:" $pfStatus (if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" })
+$pfStatus = if ($prefetch -and $prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
+$pfColor = if ($pfStatus -eq "Enabled") { "Green" } else { "DarkRed" }
+Write-Label "Prefetch Enabled:" $pfStatus $pfColor
 
-# 5. EVENT LOGS (Real)
+# =========================================================================
+# 6. EVENT LOGS (Arreglado el conflicto de parámetros de Get-WinEvent)
+# =========================================================================
 Write-Header "EVENT LOGS"
 Write-Label "USN Journal cleared -" "No records found" "Green"
 Write-Label "Event Logs cleared -" "No records found" "Green"
@@ -103,7 +124,7 @@ Write-Label "Event Logs cleared -" "No records found" "Green"
 $shutdownEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1074} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($shutdownEvent) { Write-Label "Last PC Shutdown at:" ($shutdownEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Last PC Shutdown at:" "Unknown" }
 
-# CORRECCIÓN AQUÍ: Se eliminó el parámetro en conflicto -ProviderName y se unificó en la Query de la Tabla Hash
+# Solución al error de parámetros unificando la consulta en la tabla hash
 $timeEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1; ProviderName="Microsoft-Windows-Kernel-General"} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($timeEvent) { Write-Label "System time changed at:" ($timeEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "System time changed at:" "Unknown" }
 
@@ -111,7 +132,9 @@ $logStartEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -Max
 if ($logStartEvent) { Write-Label "Event Log Service started at:" ($logStartEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Event Log Service started at:" "Unknown" }
 Write-Label "Device changes -" "No records found" "Green"
 
-# 6. PREFETCH INTEGRITY (Real)
+# =========================================================================
+# 7. PREFETCH INTEGRITY
+# =========================================================================
 Write-Header "PREFETCH INTEGRITY"
 if (Test-Path "C:\Windows\Prefetch") {
     $pfFiles = Get-ChildItem "C:\Windows\Prefetch" -ErrorAction SilentlyContinue
@@ -124,7 +147,9 @@ if (Test-Path "C:\Windows\Prefetch") {
     Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
 }
 
-# 7. RECYCLE BIN (Real)
+# =========================================================================
+# 8. RECYCLE BIN
+# =========================================================================
 Write-Header "Recycle Bin"
 $shell = New-Object -ComObject Shell.Application
 $bin = $shell.NameSpace(0x0a)
