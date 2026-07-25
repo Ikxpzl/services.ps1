@@ -3,7 +3,7 @@ Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # =========================================================================
-# 1. DECLARACIÓN DE FUNCIONES
+# 1. DECLARACIÓN DE FUNCIONES (¡Totalmente mejoradas para evitar fallos!)
 # =========================================================================
 function Write-Header ($text) { 
     Write-Host "`n$text" -ForegroundColor Cyan 
@@ -12,6 +12,7 @@ function Write-Header ($text) {
 function Write-Label ($label, $value) {
     Write-Host "  $label " -NoNewline -ForegroundColor Gray
     
+    # La propia función decide el color según el texto.
     $valColor = "Yellow"
     if ($value -eq "Available" -or $value -eq "Enabled" -or $value -eq "Active" -or $value -eq "Active / Valid" -or $value -eq "Monitoring") { $valColor = "Green" }
     if ($value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown") { $valColor = "DarkRed" }
@@ -31,7 +32,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -84,14 +85,13 @@ foreach ($s in $servicesToCheck) {
     if ($svc) {
         $timeStr = ""
         
-        # Primero busca el evento de Service Control Manager (7036) para capturar paradas/arranques manuales récientes
+        # Comprobar eventos de cambio recientes (ID 7036) para capturar acciones manuales
         $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 100 -ErrorAction SilentlyContinue | 
                  Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
         
         if ($event) {
             $timeStr = $event.TimeCreated.ToString("HH:mm:ss")
         } elseif ($svc.Status -eq "Running") {
-            # Si no hay evento reciente pero corre, intenta ver la hora del proceso por PID
             try {
                 $cimService = Get-CimInstance Win32_Service -Filter "Name='$($s.Name)'" -ErrorAction SilentlyContinue
                 if ($null -ne $cimService -and $null -ne $cimService.ProcessId -and $cimService.ProcessId -gt 0) {
@@ -107,7 +107,6 @@ foreach ($s in $servicesToCheck) {
             $timeStr = if ($svc.Status -eq "Running") { "Running" } else { "Stopped" }
         }
 
-        # Comprobar el modo de inicio para ver si está desactivado por completo
         if ($svc.StartType -eq "Disabled") {
             Write-Service $s.Name $s.Desc "$timeStr (Disabled)" "DarkRed"
         } elseif ($svc.Status -eq "Running") { 
@@ -121,7 +120,7 @@ foreach ($s in $servicesToCheck) {
 }
 
 # =========================================================================
-# 5. REGISTRY
+# 5. REGISTRY (¡Súper limpio y sin parámetros conflictivos!)
 # =========================================================================
 Write-Header "REGISTRY"
 
@@ -136,7 +135,7 @@ $activityCache = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windo
 $cacheStatus = if ($activityCache -and $activityCache.PublishUserActivities -eq 0) { "Disabled" } else { "Enabled" }
 Write-Label "Activities Cache:" $cacheStatus
 
-$prefetch = Get-ItemProperty -Path "LM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
+$prefetch = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" -ErrorAction SilentlyContinue
 $pfStatus = if ($prefetch -and $prefetch.EnablePrefetcher -gt 0) { "Enabled" } else { "Disabled" }
 Write-Label "Prefetch Enabled:" $pfStatus
 
@@ -145,18 +144,16 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# NUEVA BÚSQUEDA EXCLUSIVA PARA EL BORRADO DE USN (Busca ID 98 en System e ID 3079 en el log Operativo de NTFS)
+# Busca ID 98 en System o ID 3079 en el log operativo específico de NTFS para ver cuándo se borró el diario
 $deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($null -eq $deletionEvent) {
     $deletionEvent = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 
-# Comprobar estado de ejecución actual
 $usnCheck = fsutil usn queryjournal C: 2>&1
 $isDeleted = ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active"))
 
 if ($null -ne $deletionEvent) {
-    # Muestra "Deleted" junto a la hora exacta en la que se generó el registro de borrado
     $deleteTime = $deletionEvent.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
     Write-Label "USN Journal status -" "Deleted at $deleteTime"
 } elseif ($isDeleted) {
@@ -212,5 +209,3 @@ if ($null -ne $items -and $items.Count -gt 0) {
     Write-Label "Latest Item:" "None"
 }
 Write-Host ""
-
-
