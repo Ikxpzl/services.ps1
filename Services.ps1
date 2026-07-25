@@ -31,7 +31,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                W I N L O G               " -ForegroundColor Magenta
+Write-Host "                I K X P Z L               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -212,4 +212,5 @@ if ($null -ne $items -and $items.Count -gt 0) {
     Write-Label "Latest Item:" "None"
 }
 Write-Host ""
+
 
