@@ -2,6 +2,22 @@
 Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+# =========================================================================
+# 0. DECLARACIÓN DE FUNCIONES (Siempre primero para evitar CommandNotFound)
+# =========================================================================
+function Write-Header ($text) { Write-Host "`n$text" -ForegroundColor Cyan }
+
+function Write-Label ($label, $value, $valColor = "Yellow") {
+    Write-Host "  $label " -NoNewline -ForegroundColor Gray
+    Write-Host $value -ForegroundColor $valColor
+}
+
+function Write-Service ($name, $desc, $status, $color) {
+    Write-Host "  $($name.PadRight(15))" -NoNewline -ForegroundColor $color
+    Write-Host "$($desc.PadRight(45))" -NoNewline -ForegroundColor $color
+    if ($status -like "*:*") { Write-Host "| $status" -ForegroundColor Gray } else { Write-Host $status -ForegroundColor $color }
+}
+
 # CARTEL GIGANTE EN LA PARTE SUPERIOR
 Write-Host @"
   _ _               _     _ 
@@ -12,18 +28,6 @@ Write-Host @"
      |_|              |___| 
 "@ -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
-
-# Funciones auxiliares para colores y formato
-function Write-Header ($text) { Write-Host "`n$text" -ForegroundColor Cyan }
-function Write-Label ($label, $value, $valColor = "Yellow") {
-    Write-Host "  $label " -NoNewline -ForegroundColor Gray
-    Write-Host $value -ForegroundColor $valColor
-}
-function Write-Service ($name, $desc, $status, $color) {
-    Write-Host "  $($name.PadRight(15))" -NoNewline -ForegroundColor $color
-    Write-Host "$($desc.PadRight(45))" -NoNewline -ForegroundColor $color
-    if ($status -like "*:*") { Write-Host "| $status" -ForegroundColor Gray } else { Write-Host $status -ForegroundColor $color }
-}
 
 # 1. SYSTEM BOOT TIME (Real)
 Write-Header "SYSTEM BOOT TIME"
@@ -52,7 +56,7 @@ $servicesToCheck = @(
     @{Name="Appinfo"; Desc="Application Information"}
     @{Name="CDPSvc"; Desc="Connected Devices Platform Service"}
     @{Name="DcomLaunch"; Desc="DCOM Server Process Launcher"}
-    @{Name="PlugPlay"; Desc="Plug and Play"}
+    @{Name="PlugPlay"; Play="Plug and Play"; Desc="Plug and Play"}
     @{Name="wsearch"; Desc="Windows Search"}
 )
 
@@ -60,8 +64,10 @@ foreach ($s in $servicesToCheck) {
     $svc = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
     if ($svc) {
         if ($svc.Status -eq "Running") {
-            $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
-                     Where-Object { $_.Message -like "*$($s.Desc)*corriendo*" -or $_.Message -like "*$($s.Name)*running*" } | Select-Object -First 1
+            # Se optimiza la búsqueda del evento 7036 sin depender estrictamente de cadenas de texto rígidas
+            $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 80 -ErrorAction SilentlyContinue | 
+                     Where-Object { $_.Properties[0].Value -eq $s.Name -or $_.Message -like "*$($s.Name)*" } | Select-Object -First 1
+            
             $timeStr = if ($event) { $event.TimeCreated.ToString("HH:mm:ss") } else { "Running" }
             Write-Service $s.Name $s.Desc $timeStr "Green"
         } else {
@@ -97,7 +103,8 @@ Write-Label "Event Logs cleared -" "No records found" "Green"
 $shutdownEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1074} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($shutdownEvent) { Write-Label "Last PC Shutdown at:" ($shutdownEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "Last PC Shutdown at:" "Unknown" }
 
-$timeEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1} -ProviderName "Microsoft-Windows-Kernel-General" -MaxEvents 1 -ErrorAction SilentlyContinue
+# CORRECCIÓN AQUÍ: Se eliminó el parámetro en conflicto -ProviderName y se unificó en la Query de la Tabla Hash
+$timeEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=1; ProviderName="Microsoft-Windows-Kernel-General"} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($timeEvent) { Write-Label "System time changed at:" ($timeEvent.TimeCreated.ToString("MM/dd HH:mm")) } else { Write-Label "System time changed at:" "Unknown" }
 
 $logStartEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 1 -ErrorAction SilentlyContinue
@@ -133,5 +140,3 @@ if ($items.Count -gt 0) {
     Write-Label "Latest Item:" "None"
 }
 Write-Host ""
-
-
