@@ -3,7 +3,7 @@ Clear-Host
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # =========================================================================
-# 1. DECLARACIÓN DE FUNCIONES
+# 1. DECLARACIÓN DE FUNCIONES (¡Totalmente mejoradas para evitar fallos!)
 # =========================================================================
 function Write-Header ($text) { 
     Write-Host "`n$text" -ForegroundColor Cyan 
@@ -12,6 +12,7 @@ function Write-Header ($text) {
 function Write-Label ($label, $value) {
     Write-Host "  $label " -NoNewline -ForegroundColor Gray
     
+    # La propia función decide el color según el texto.
     $valColor = "Yellow"
     if ($value -eq "Available" -or $value -eq "Enabled" -or $value -eq "Active" -or $value -eq "Active / Valid" -or $value -eq "Monitoring") { $valColor = "Green" }
     if ($value -like "Deleted*" -or $value -eq "Disabled" -or $value -eq "Deleted" -or $value -eq "Deleted / Inactive" -or $value -eq "Unknown" -or $value -eq "Stopped") { $valColor = "DarkRed" }
@@ -31,7 +32,7 @@ function Write-Service ($name, $desc, $status, $color) {
 
 # CARTEL SUPERIOR
 Write-Host " =========================================" -ForegroundColor Magenta
-Write-Host "                I K X P Z L               " -ForegroundColor Magenta
+Write-Host "                W I N L O G               " -ForegroundColor Magenta
 Write-Host " =========================================" -ForegroundColor Gray
 
 # =========================================================================
@@ -84,13 +85,13 @@ foreach ($s in $servicesToCheck) {
     if ($svc) {
         $timeStr = ""
         
-        # CAMBIO CLAVE: Si el servicio está parado actualmente en el sistema, salta el registro y pone "Stopped"
+        # Si el servicio no está corriendo, forzar "Stopped" inmediatamente
         if ($svc.Status -ne "Running") {
             Write-Service $s.Name $s.Desc "Stopped" "DarkRed"
             continue
         }
         
-        # Si está corriendo, buscamos el evento de cambio de estado más reciente
+        # Si está corriendo, buscar el evento 7036 más reciente en orden descendente
         $event = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7036} -MaxEvents 50 -ErrorAction SilentlyContinue | 
                  Where-Object { $_.Properties.Value -contains $s.Name -or $_.Message -like "*$($s.Name)*" } | Sort-Object TimeCreated -Descending | Select-Object -First 1
         
@@ -123,7 +124,7 @@ foreach ($s in $servicesToCheck) {
 }
 
 # =========================================================================
-# 5. REGISTRY
+# 5. REGISTRY (¡Súper limpio y sin parámetros conflictivos!)
 # =========================================================================
 Write-Header "REGISTRY"
 
@@ -147,11 +148,11 @@ Write-Label "Prefetch Enabled:" $pfStatus
 # =========================================================================
 Write-Header "EVENT LOGS"
 
-# Comprobar el estado real actual primero mediante fsutil
+# Comprobar el estado real actual mediante fsutil
 $usnCheck = fsutil usn queryjournal C: 2>&1
 $isDeletedNow = ($null -ne $usnCheck -and ($usnCheck -match "Error:" -or $usnCheck -match "no está activo" -or $usnCheck -match "NOT active"))
 
-# CAMBIO CLAVE: Buscamos el evento más RECIENTE de borrado ordenando por fecha de forma descendente para evitar jalar logs antiguos de ayer
+# Buscar el evento más RECIENTE de borrado (ID 98 o ID 3079) ordenando descendentemente
 $deletionEvent = Get-WinEvent -FilterHashtable @{LogName='System'; Id=98} -MaxEvents 5 -ErrorAction SilentlyContinue | Sort-Object TimeCreated -Descending | Select-Object -First 1
 if ($null -eq $deletionEvent) {
     $deletionEvent = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Ntfs/Operational'; Id=3079} -MaxEvents 5 -ErrorAction SilentlyContinue | Sort-Object TimeCreated -Descending | Select-Object -First 1
