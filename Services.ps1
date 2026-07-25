@@ -192,8 +192,7 @@ if (Test-Path "C:\Windows\Prefetch") {
     } else {
         Write-Host "  Prefetch folder looks healthy ($($pfFiles.Count) items found)" -ForegroundColor Green
     }
-} else {    }
-} else {
+} else {   
     Write-Host "  Prefetch folder does not exist!" -ForegroundColor DarkRed
 }
 
